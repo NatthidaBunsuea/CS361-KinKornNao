@@ -1,9 +1,14 @@
 Project Proposal: CS361
 ข้อมูลทีม
 •	ชื่อโปรเจกต์: KinKornNao (กินก่อนเน่า)
-•	สมาชิกทีม: 6 คน (ระบุชื่อ-รหัสนักศึกษา-บัญชี GitHub ใน repo จริง)
-1.	6609650350 ณัฐธิดา บุญเสือ / Natthida Bunsuea – 6609650350
-2.
+•	สมาชิกทีม: 6 คน (รหัสนักศึกษา-ชื่อนักศึกษา-ชื่อบัญชี GitHub)
+1.	6609650350 ณัฐธิดา บุญเสือ / NatthidaBunsuea
+2.	6609650491 ปิยธิดา ฤกษ์ดี /  Muayminly
+3.	6609650335 ณัฏฐ์ เพิ่มกิตติกุล / Nat Pemkittikul - 6609650335
+4.	6609650756 อานุภาพ อนุรักษ์สยาม /  ArnuparpAnuraksiam
+5.	6609650137 กชพร หาวิรส
+6.	6609650574 ภูมิภัทร แสนทองแก้ว
+
 
 Problem Statement
 ในชีวิตประจำวัน หลายครัวเรือนประสบปัญหาการจัดเก็บและติดตามวัตถุดิบในบ้าน เช่น ลืมว่าวัตถุดิบใดมีอยู่แล้ว ซื้อซ้ำโดยไม่จำเป็น หรือลืมใช้จนหมดอายุ ส่งผลให้เกิดความสิ้นเปลือง ค่าใช้จ่ายที่เพิ่มขึ้น และยังส่งผลต่อการเกิดขยะอาหาร (Food Waste) ซึ่งเป็นปัญหาสำคัญทั้งในระดับครัวเรือนและสังคมโดยรวม
@@ -44,32 +49,83 @@ Constraints
 •	Privacy / Data retention เก็บข้อมูลผู้ใช้ตามนโยบาย (ไม่เก็บ sensitive data เกินจำเป็น)
 •	Third-party limits SNS/SES rate limits, Cognito token expiry
 
-Well-Architected Analysis
-สภาพปัจจุบัน: S3 (Frontend) + API Gateway (HTTP API + JWT Authorizer/Cognito) + Lambda + DynamoDB + SNS (อีเมลแจ้งเตือน 7:00 น.)
-1) Operational Excellence
-•	 จุดแข็ง: โค้ดแยกเป็นฟังก์ชัน, CloudWatch Logs ใช้ได้, ดีพลอยง่าย
-•	จุดอ่อน: ยังไม่มี Runbook/Playbook เหตุขัดข้อง, ไม่มี CI/CD ครบวงจร, Logging ยังไม่เป็น structured/trace id
-•	ปรับปรุง: GitHub Actions (lint/test/deploy dev→prod), Structured log + Correlation ID, Health check/Status page, Runbook
-2) Security
-•	จุดแข็ง: ใช้ Cognito + JWT, API Gateway Authorizer, S3 Static hosting
-•	จุดอ่อน: IAM อาจกว้างเกิน (ไม่ least privilege), การจัดการ secret/param ยังไม่ชัด, CORS/config ผิดพลาดทำให้เกิด 401 ได้
-•	ปรับปรุง: IAM least-privilege ให้ Lambda/DynamoDB/SNS, ใช้ SSM Parameter Store, คุม CORS ให้จำเพาะ origin, เพิ่ม Token refresh/expiry handling ฝั่งหน้าเว็บ
-3) Reliability
-•	จุดแข็ง: Serverless ลด single point, Multi-AZ โดยบริการ AWS
-•	จุดอ่อน: ไม่มี DLQ/Retry สำหรับงานแจ้งเตือน, ไม่มี Idempotency ในเขียนซ้ำ, ไม่มี Alarm ตาม SLA
-•	ปรับปรุง: ตั้ง DLQ + Retry (Lambda/SNS), Idempotency key (เช่น itemId+date), CloudWatch Alarms (5xx, latency, throttling), Backup/Export ข้อมูลสำคัญ
-4) Performance Efficiency
-•	จุดแข็ง: DynamoDB latency ต่ำ, Lambda scale อัตโนมัติ
-•	จุดอ่อน: สคีมา/Index อาจยังไม่เหมาะกับหลายมิติ (เช่น household), ไม่มีแคช, Cold start ยังไม่ถูกจูน
-•	ปรับปรุง: ออกแบบ PK/SK + GSI สำหรับ use case ใหม่, Query/Projection เฉพาะ field ที่ใช้, เปิดแคชชั้นอ่าน (เช่น short-lived cache), จูนขนาดเมม Lambda/Node เวอร์ชัน
-5) Cost Optimization
-•	จุดแข็ง: จ่ายตามใช้, ไม่มีเซิร์ฟเวอร์ค้าง
-•	จุดอ่อน: ยังไม่มี Budget/Alert, Provisioned/RCU/WCU ไม่ถูกจูน, งาน Batch/Scan เสี่ยงค่าบาน
-•	ปรับปรุง: AWS Budgets + Alarm, ใช้ On-demand อย่างเหมาะสม/จูน RCU-WCU, หลีกเลี่ยง Scan, Batch write/read
-6) Sustainability
-•	จุดแข็ง: Serverless ใช้ทรัพยากรเท่าที่จำเป็น
-•	จุดอ่อน: ไม่มีการมอนิเตอร์งานที่ซ้ำซ้อน/ลูปผิดพลาด, ไม่มีนโยบาย Lifecycle (เช่น ล็อก/ไฟล์/ข้อมูลชั่วคราว)
-•	ปรับปรุง: ล้างข้อมูลชั่วคราวด้วย TTL, ปิดทรัพยากร dev ที่ไม่ใช้, รวม log/metrics อย่างมี retention policy
+Well-Architected Analysis 
+สภาพปัจจุบัน: ระบบใช้ S3 สำหรับหน้าเว็บ, API Gateway + JWT/Cognito สำหรับจัดการสิทธิ์, Lambda สำหรับประมวลผล, DynamoDB เก็บข้อมูล, และ SNS ส่งอีเมลแจ้งเตือนเวลา 7:00 น.
+1) Operational Excellence (ประสิทธิภาพในการดำเนินงาน)
+•	จุดแข็ง:
+o	โค้ดแยกเป็นฟังก์ชันชัดเจน
+o	มี CloudWatch Logs ตรวจสอบการทำงาน
+o	การอัพเดตระบบทำได้ง่าย
+•	จุดอ่อน:
+o	ยังไม่มีเอกสารขั้นตอนแก้ปัญหา (Runbook/Playbook)
+o	ระบบ CI/CD ยังไม่ครบวงจร
+o	การเก็บ Log ยังไม่เป็นระเบียบและติดตามแต่ละคำสั่งยาก
+•	แนวทางปรับปรุง:
+o	ใช้ GitHub Actions ทำ lint, test, และ deploy จาก dev → prod
+o	จัดเก็บ Log เป็น structured พร้อมใส่รหัสติดตาม (Correlation ID)
+o	ทำหน้า Health Check / Status Page
+o	เขียน Runbook แก้ปัญหาต่าง ๆ
+2) Security (ความปลอดภัย)
+•	จุดแข็ง:
+o	ใช้ Cognito + JWT ตรวจสอบผู้ใช้
+o	API Gateway มี Authorizer
+o	หน้าเว็บ S3 static hosting ปลอดภัย
+•	จุดอ่อน:
+o	สิทธิ์ IAM อาจกว้างเกิน ไม่ได้กำหนดเฉพาะเจาะจง
+o	การจัดการ secret หรือ parameter ยังไม่ชัดเจน
+o	การตั้งค่า CORS ผิดพลาด อาจทำให้เกิด 401
+•	แนวทางปรับปรุง:
+o	กำหนด IAM แบบ least-privilege ให้ Lambda, DynamoDB, SNS
+o	เก็บ secret/parameter ใน SSM Parameter Store
+o	ควบคุม CORS ให้อนุญาตเฉพาะ origin ที่จำเป็น
+o	จัดการ Token ฝั่งหน้าเว็บให้รองรับการหมดอายุและรีเฟรช
+3) Reliability (ความเสถียร)
+•	จุดแข็ง:
+o	ใช้ Serverless ลดจุดล้มเหลว
+o	AWS ให้บริการ Multi-AZ อยู่แล้ว
+•	จุดอ่อน:
+o	ระบบแจ้งเตือนยังไม่มี Retry/DLQ
+o	การเขียนข้อมูลซ้ำยังไม่ได้ป้องกัน
+o	ไม่มี Alarm ติดตาม SLA
+•	แนวทางปรับปรุง:
+o	ตั้ง DLQ + Retry สำหรับ Lambda และ SNS
+o	ใช้ Idempotency Key ป้องกันเขียนซ้ำ
+o	ทำ CloudWatch Alarm สำหรับ 5xx, latency, throttling
+o	Backup และ export ข้อมูลสำคัญเป็นประจำ
+4) Performance Efficiency (ประสิทธิภาพ)
+•	จุดแข็ง:
+o	DynamoDB ตอบสนองเร็ว
+o	Lambda scale อัตโนมัติ
+•	จุดอ่อน:
+o	Schema หรือ Index อาจยังไม่เหมาะกับ use case หลายมิติ
+o	ไม่มี caching
+o	Cold start ของ Lambda ยังไม่ได้คำนึงถึง
+•	แนวทางปรับปรุง:
+o	ออกแบบ Primary Key หรือ Sort Key และ GSI ให้เหมาะกับ use case
+o	Query เฉพาะ field ที่ต้องใช้
+o	เปิด short-lived cache สำหรับอ่านข้อมูลบ่อย
+o	ปรับ Lambda memory และ Node version ให้เหมาะสม
+5) Cost Optimization (การใช้ค่าใช้จ่ายอย่างเหมาะสม)
+•	จุดแข็ง:
+o	จ่ายตามที่ใช้จริง ไม่มีเซิร์ฟเวอร์ค้าง
+•	จุดอ่อน:
+o	ยังไม่มี Budget/Alert
+o	Provisioned RCU/WCU ไม่ถูกจูน
+o	งาน Batch/Scan เสี่ยงค่าใช้จ่ายบาน
+•	แนวทางปรับปรุง:
+o	ตั้ง AWS Budgets + Alarm
+o	ใช้ On-demand / ปรับ RCU/WCU ให้เหมาะสม
+o	ลดการ Scan/Batch write-read ขนาดใหญ่
+6) Sustainability (ความยั่งยืน)
+•	จุดแข็ง:
+o	Serverless ใช้ทรัพยากรตามจำเป็น
+•	จุดอ่อน:
+o	ไม่มีการตรวจงานซ้ำหรือลูปผิดพลาด
+o	ไม่มีนโยบายล้างข้อมูลชั่วคราว
+•	แนวทางปรับปรุง:
+o	ลบข้อมูลชั่วคราวด้วย TTL
+o	ปิดทรัพยากร dev ที่ไม่ใช้
+o	รวม Log/Metric และตั้งนโยบาย retention
 
 Development / Improvement Plan
 Checkpoint #1 (สัปดาห์ที่ 5–6)
@@ -116,6 +172,9 @@ o	ผู้ใช้ ล็อกอิน/ล็อกเอาท์ ได้
 o	สามารถ เพิ่ม/ลบ/แก้ไข วัตถุดิบ ข้อมูลเก็บใน DynamoDB อย่างถูกต้อง
 o	ดูรายการวัตถุดิบ พร้อมวันหมดอายุ แสดงผลตรงกับ DB
 o	ระบบ ส่งอีเมลแจ้งเตือน วัตถุดิบใกล้หมดอายุ/หมดอายุทุกเช้า 07:00 น.
+o	ระบบสามารถแนะนำเมนูจากวัตถุดิบที่มี
+o	ระบบสามารถดูหน้าแดชบอร์ดสรุปผลรายสัปดาห์
+o	ระบบสามารถแชร์วัตถุดิบร่วมกันระหว่างคนในครอบครัวหรือคนใสบ้านเดียวกัน
 2.	Technical Success
 o	ระบบมี Uptime ≥ 99% (ตาม CloudWatch logs)
 o	Response time ของ API (CRUD) ≤ 500ms เฉลี่ย
