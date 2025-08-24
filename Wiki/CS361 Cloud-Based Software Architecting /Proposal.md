@@ -182,11 +182,10 @@ o	Monitor ผ่าน CloudWatch (log, metrics, alarms)
 Final (สัปดาห์ที่ 15)
 ช่วงเวลา: หลังส่งงาน #2 สัปดาห์ 15
 •	Frontend
-o	เพิ่มหน้าโปรไฟล์ผู้ใช้ (แก้ไขข้อมูลติดต่อ, email, password reset)
 o	UI สมบูรณ์และ responsive
 •	Backend
 o	ปรับปรุง query (เช่น index DynamoDB) ให้ทำงานเร็วขึ้น
-o	เพิ่มฟังก์ชัน optional เช่น “แนะนำเมนูจากวัตถุดิบที่มี” หรือ “แชร์รายการกับเพื่อนในบ้าน”
+o	เพิ่มฟังก์ชัน เช่น “แนะนำเมนูจากวัตถุดิบที่มี” หรือ “แชร์รายการกับเพื่อนในบ้าน”
 •	Cloud / Infra
 o	Optimize security (CORS allow เฉพาะ domain จริง, SES ออกจาก sandbox)
 o	Load testing + tuning DynamoDB/Lambda timeout
