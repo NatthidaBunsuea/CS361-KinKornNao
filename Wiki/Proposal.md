@@ -129,6 +129,7 @@ o	ปิดทรัพยากร dev ที่ไม่ใช้
 o	รวม Log/Metric และตั้งนโยบาย retention
 
 Development / Improvement Plan
+
 Checkpoint #1 (สัปดาห์ที่ 5–6)
 ช่วงเวลา: หลังส่ง proposal ก่อนสัปดาห์ 6
 •	Frontend
@@ -143,6 +144,7 @@ o	ตั้งค่า Cognito User Pool (สมัครสมาชิก/ล
 o	สร้าง API Gateway (HTTP API) + integrate Lambda
 o	ตั้งค่า S3 hosting สำหรับ frontend (Dev environment)
 •	เป้าหมาย: ให้ระบบสามารถ Login และจัดการข้อมูลใน DynamoDB ผ่าน API ได้ → มี ฟังก์ชันหลักอย่างน้อย 30%
+
 Checkpoint #2 (สัปดาห์ที่ 10–11)
 ช่วงเวลา: หลังส่งงาน #1ก่อนสัปดาห์ 11
 •	Frontend
@@ -154,6 +156,7 @@ o	ส่งแจ้งเตือนผ่าน SNS/SES ไปยัง email
 o	เพิ่ม CI/CD (GitHub Actions S3 + Lambda deploy)
 o	Monitor ผ่าน CloudWatch (log, metrics, alarms)
 •	เป้าหมาย: ระบบแจ้งเตือนเริ่มทำงานจริง, รองรับผู้ใช้หลายคน, ฟังก์ชันครบอย่างน้อย 70%
+
 Final (สัปดาห์ที่ 15)
 ช่วงเวลา: หลังส่งงาน #2 สัปดาห์ 15
 •	Frontend
