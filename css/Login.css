@@ -1,0 +1,59 @@
+/***Specific styles for the Login page layout***/
+body {
+  overflow: hidden; /* Prevent scrolling */
+}
+
+.split-screen {
+  display: flex;
+  height: 100vh;
+}
+
+.left-pane {
+  width: 50%;
+  height: 100%;
+  /* Path is relative to the css folder, so we go up one level ../ */
+  background: url('../assets/food_illustration.png') no-repeat center center;
+  background-size: cover;
+}
+
+.right-pane {
+  width: 50%;
+  height: 100%;
+  /* The semi-transparent white layer with blur effect */
+  background: rgba(255, 255, 255, 0.906);
+  backdrop-filter: blur(20px);
+  /* Centering the content inside */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+}
+
+.login-content {
+  max-width: 400px;
+  width: 100%;
+}
+
+.separator {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  font-size: 10px;
+  color: #9ca3af;
+  margin: 14px 0;
+}
+
+.separator::before,
+.separator::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid #d1d5db;
+}
+
+.separator::before {
+  margin-right: .5em;
+}
+
+.separator::after {
+  margin-left: .5em;
+}

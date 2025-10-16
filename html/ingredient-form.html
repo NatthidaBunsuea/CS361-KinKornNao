@@ -1,0 +1,96 @@
+<!--
+  KinKonNao™ — Ingredient Form Page
+  บทบาทหน้า:
+    - ฟอร์มเพิ่ม/แก้ไขวัตถุดิบ (ชื่อ/จำนวน/หน่วย/หมวด/วันหมดอายุ)
+    - ฝั่งซ้ายเป็นภาพตู้เย็นแบบ hover เปลี่ยนรูป + ลิงก์ไปดูรายการ
+  สคริปต์ที่ใช้:
+    - js/apiConfig.js, js/auth.js, js/nav.js, js/api.js, js/ingredientForm.js
+  องค์ประกอบสำคัญ:
+    - #form (input: name, quantity, unit, category, expiry)
+-->
+
+<!--DESCRIBTION : Add ingredients into the fridge-->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KinKonNao™ • Add</title>
+  <link rel="icon" href="../assets/avatar.svg">
+  <!-- Link to global styles -->
+  <link rel="stylesheet" href="../css/styles.css"/>
+  <!-- Link to new, page-specific styles -->
+  <link rel="stylesheet" href="../css/ingredient-form.css"/>
+</head>
+
+<body style="overflow: hidden;"> <main class="full-height-split-layout">
+    
+      <div class="fridge-pane">
+        <div class="fridge-text-overlay">
+          Click this fridge to view your ingredients
+        </div>
+        <a href="./fridge-list.html" title="View your ingredients">
+          <img 
+            src="../assets/fridge_closed.jpeg" 
+            alt="fridge" 
+            class="fridge-bg-image"
+            onmouseover="this.src='../assets/fridge_opened.jpeg'"
+            onmouseout="this.src='../assets/fridge_closed.jpeg'"
+          />
+        </a>
+      </div>
+
+      <div class="form-pane">
+        <div class="card" style="max-width: 500px; width: 100%;">
+          
+          <h2>Add your ingredients here </h2>
+          <form id="form">
+            <label>Ingredient Name</label>
+            <input class="input" name="name" placeholder="e.g., pork, egg, tomato" required />
+            
+            <div class="grid-2" style="margin-top:10px">
+              <div>
+                <label>Quantity</label>
+                <input class="input" name="quantity" type="number" min="0" step="any" placeholder="e.g., 2" required />
+              </div>
+              <div>
+                <label>Unit</label>
+                <select class="input" name="unit">
+                  <option value="pcs">pcs</option>
+                  <option value="g">g</option>
+                  <option value="kg">kg</option>
+                  <option value="ml">ml</option>
+                  <option value="L">L</option>
+                </select>
+              </div>
+            </div>
+            
+            <div style="margin-top:10px">
+              <label>Category</label>
+              <input class="input" name="category" placeholder="protein / dairy / vegetable..." />
+            </div>
+            
+            <div style="margin-top:10px">
+              <label>Expiration Date</label>
+              <input class="input" type="date" name="expiry" required />
+            </div>
+            
+            <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;">
+              <button type="reset" class="btn">CLEAR</button>
+              <button type="submit" class="btn brand">SAVE</button>
+            </div>
+          </form>
+     
+    </div>
+    
+  </main>
+
+  <div class="toast"></div>
+
+  <script src="../js/apiConfig.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/nav.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/ingredientForm.js"></script>
+</body>
+</html>

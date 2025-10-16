@@ -1,0 +1,58 @@
+<!--
+  KinKonNao™ — Recipes Page
+  บทบาทหน้า:
+    - แสดงเมนูที่ระบบแนะนำจากวัตถุดิบในตู้
+    - Modal แสดงส่วนผสม+ขั้นตอน และเวลาทำ
+  สคริปต์ที่ใช้:
+    - js/apiConfig.js, js/auth.js, js/nav.js, js/api.js, js/recipes.js
+  องค์ประกอบสำคัญ:
+    - #recipes (การ์ดเมนู), #recipeModal (#mTitle, #mTime, #mIng, #mSteps, #mClose)
+-->
+
+<!--DESCRIBTION : Suggested some menu , give you recipes-->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KinKonNao™ • Recipes</title>
+  <link rel="icon" href="../assets/avatar.svg">
+  <link rel="stylesheet" href="../css/styles.css"/>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="card">
+      <h2>Suggested Menu</h2>
+      <div id="recipes" class="grid-3"></div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="recipeModal" style="position:fixed;inset:0;display:none;background:rgba(0,0,0,.35)">
+    <div class="card" style="max-width:680px;margin:6vh auto;padding:20px;background:white;border-radius:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <h2 id="mTitle">Recipe</h2>
+        <button id="mClose" class="btn">Close</button>
+      </div>
+      <div class="small" id="mTime">~15 นาที</div>
+      <div class="grid-2" style="margin-top:8px">
+        <div>
+          <h3>Ingredients</h3>
+          <ul id="mIng"></ul>
+        </div>
+        <div>
+          <h3>Steps</h3>
+          <ol id="mSteps"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/apiConfig.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/nav.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/recipes.js"></script>
+</body>
+</html>

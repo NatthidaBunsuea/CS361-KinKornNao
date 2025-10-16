@@ -1,0 +1,55 @@
+<!--
+  KinKonNao™ — Weekly Dashboard Page
+  บทบาทหน้า:
+    - แสดงสรุปสถิติ 7 วันที่ผ่านมา: Most Used, Wasted, Used vs Waste, 7-day Activity
+    - แสดง Leftovers (ชื่อ/จำนวน/วันหมดอายุ/สถานะ)
+  สคริปต์ที่ใช้:
+    - Chart.js CDN
+    - js/apiConfig.js, js/auth.js, js/nav.js, js/api.js, js/dashboard.js
+  องค์ประกอบสำคัญ:
+    - #empty (ถ้าไม่มีข้อมูล), #charts, #leftovers, #usedChart, #wasteChart, #stackedChart, #trendChart
+-->
+
+<!--DESCRIBTION : showing graphs in a week-->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KinKonNao™ • Weekly Dashboard</title>
+  <link rel="icon" href="../assets/avatar.svg">
+  <link rel="stylesheet" href="../css/styles.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="card">
+      <div id="empty" class="card" style="display:none;background:#f3f4f6">ยังไม่มีข้อมูลการใช้งาน/ทิ้งในสัปดาห์นี้</div>
+      <div id="charts" class="grid-3">
+        <div class="card"><h3>Most Used</h3><canvas id="usedChart" height="200"></canvas></div>
+        <div class="card"><h3>Wasted</h3><canvas id="wasteChart" height="200"></canvas></div>
+        <div class="card">
+          <h3>Leftovers</h3>
+          <div class="table">
+            <div class="small" style="display:grid;grid-template-columns:1.2fr .6fr .6fr .6fr;gap:10px;margin-bottom:6px">
+              <div>Name</div><div>Qty</div><div>Expiry</div><div>Status</div>
+            </div>
+            <div id="leftovers" style="display:grid;gap:10px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card"><h3>Used vs Waste</h3><canvas id="stackedChart" height="220"></canvas></div>
+        <div class="card"><h3>7-day Activity</h3><canvas id="trendChart" height="220"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/apiConfig.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/nav.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/dashboard.js"></script>
+</body>
+</html>

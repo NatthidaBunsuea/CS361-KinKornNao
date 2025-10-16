@@ -1,0 +1,25 @@
+/* Style for the back button */
+.back-button {
+  display: inline-block; /* Allows setting margins */
+  margin-bottom: 16px; /* Creates space between the button and the table */
+  background: transparent;
+  border-radius: 50%; /* Makes the background circular */
+  padding: 8px;
+  line-height: 0; /* Ensures the image fits perfectly */
+  transition: all 0.2s ease;
+}
+
+.back-button img {
+  width: 24px;  /* Control the size of the icon */
+  height: 24px;
+  transition: transform 0.2s ease;
+}
+
+.back-button:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,.1);
+  transform: translateY(-1px);
+}
+
+.back-button:hover img {
+  transform: scale(1.1); /* Slight zoom effect on hover */
+}

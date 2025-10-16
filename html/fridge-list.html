@@ -1,0 +1,70 @@
+<!--
+  KinKonNao™ — Fridge List Page
+  บทบาทหน้า:
+    - แสดงรายการวัตถุดิบของผู้ใช้ (mine) ในรูปแบบตาราง
+    - แสดงวันหมดอายุ + ไฮไลต์สีแดงถ้าหมดอายุ และลิงก์ไปหน้าแก้ไข
+  สคริปต์ที่ใช้:
+    - js/apiConfig.js, js/auth.js, js/nav.js, js/api.js
+    - สคริปต์ inline: ดึงรายการด้วย Api.listIngredients() แล้วเติม tbody
+  องค์ประกอบสำคัญ:
+    - <table> #tbody (เติมรายการ), ปุ่ม back ไป ingredient-form.html
+-->
+
+<!--DESCRIBTION : All ingredients inside the fridge-->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KinKonNao™ • Fridge</title>
+  <link rel="icon" href="../assets/avatar.svg">
+  <!-- Link to global styles -->
+  <link rel="stylesheet" href="../css/styles.css"/>
+  <!-- Link to new, page-specific styles -->
+  <link rel="stylesheet" href="../css/fridge-list.css"/>
+</head>
+<body class="fridge-list-page-bg">
+  <div class="container">
+    <!-- Header -->
+    <div class="card">
+       <a href="./ingredient-form.html" class="back-button" title="Add or Edit Ingredient">
+        <img src="../assets/back-button.svg" alt="Back to form">
+      </a>
+      <table class="table" style="width:100%">
+        <thead>
+          <tr style="background:#ffd6e3">
+            <th>Ingredient</th><th>Quantity</th><th>Expiration</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="../js/apiConfig.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/nav.js"></script>
+  <script src="../js/api.js"></script>
+  <script>
+    const me = Auth.requireLogin(); if(!me) throw new Error();
+    UI.mountHeader();
+    const T = document.getElementById('tbody');
+    Api.listIngredients('mine', me.id, me.householdId).then(items=>{
+      T.innerHTML='';
+      items.forEach(it=>{
+        const tr=document.createElement('tr');
+        const days=UI.daysUntil(it.expiry);
+        const status= days<0 ? '<span style="color:#ef4444">expired</span>' : 'fresh';
+        const expStyle= days<0 ? 'style="color:#ef4444;font-weight:700"' : '';
+        tr.innerHTML = `
+          <td>${it.name}</td>
+          <td>${it.quantity} ${it.unit||''}</td>
+          <td ${expStyle}>${UI.fmtDate(it.expiry)}</td>
+          <td>${status}</td>
+          <td><a href="./ingredient-form.html?id=${it.id}&scope=mine">edit</a></td>`;
+        T.appendChild(tr);
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!--
+  KinKonNao™ — Login Page (หน้าเข้าสู่ระบบหลักของเว็บแอป)
+
+  🧭 บทบาทหลัก:
+    - เป็นจุดเริ่มต้นของระบบ KinKonNao™ ที่ผู้ใช้จะต้องล็อกอินก่อนเข้าใช้งาน
+    - เมื่อเข้าสู่ระบบสำเร็จ จะสร้างข้อมูลผู้ใช้จำลอง (mock user) 
+      แล้วบันทึกลงใน localStorage ภายใต้คีย์ 'fs_auth'
+    - หลังจากล็อกอินสำเร็จ จะ redirect ไปหน้า ./pages/ingredient-form.html
+
+  ⚙️ โครงสร้างหน้า:
+    - พื้นหลังแบบ split-screen (ฝั่งซ้ายตกแต่ง, ฝั่งขวาเป็นฟอร์ม)
+    - ส่วนของฟอร์ม login อยู่ใน class="login-content"
+      > ฟิลด์ Email (username)
+      > ฟิลด์ Password
+      > ปุ่ม LOGIN
+      > ปุ่ม REGISTER (ยังไม่ได้เชื่อมต่อกับ backend)
+    - ข้อความสโลแกน: "Foodie is goodie, Family loves food."
+
+  🧩 การทำงานของสคริปต์ (inline script ด้านล่าง):
+    - ฟังก์ชัน _genToken():
+        สร้าง token แบบสุ่มโดยเข้ารหัส Base64 ของเลขสุ่ม + timestamp
+    - ตัวดัก event 'submit' ของฟอร์ม:
+        1. ป้องกันการ reload หน้า
+        2. ดึงค่า email และ password จาก input
+        3. ตรวจสอบว่ากรอกครบหรือไม่
+        4. สร้าง object user:
+            {
+              id: 'U-' + [รหัสสุ่ม],
+              name: [ชื่อจาก email ก่อน @],
+              email: [email],
+              householdId: 'H-1001',      ← household เริ่มต้น
+              token: [token ที่สร้าง],
+              expiresAt: [เวลาหมดอายุ 8 ชั่วโมงนับจากนี้]
+            }
+        5. บันทึก user ลง localStorage ภายใต้คีย์ 'fs_auth'
+        6. redirect ไปหน้า ingredient-form.html
+
+  📦 ข้อมูลที่บันทึกไว้ (localStorage → 'fs_auth'):
+      {
+        "id": "U-xxxxx",
+        "name": "user",
+        "email": "user@example.com",
+        "householdId": "H-1001",
+        "token": "abc123...",
+        "expiresAt": 1710000000000
+      }
+
+  💡 หมายเหตุเพิ่มเติม:
+    - ใช้เพียง mock login ยังไม่มีการตรวจสอบจริงกับ backend
+    - โครงสร้าง UI ใช้ไฟล์ CSS หลัก ./css/styles.css และเฉพาะหน้า ./css/Login.css
+    - favicon: ./assets/avatar.svg
+    - หลังจากล็อกอินแล้ว ส่วนอื่นของระบบ (เช่น api.js, auth.js) 
+      จะอ่านข้อมูลจาก localStorage เพื่อระบุตัวผู้ใช้
+
+  🧱 DOM elements สำคัญ:
+    - #loginForm → <form> หลัก
+    - input[name=email], input[name=password]
+    - ปุ่ม LOGIN → trigger submit event
+    - .toast → สำหรับแจ้งเตือน (placeholder ยังไม่ใช้ในหน้านี้)
+-->
+
+<!--DESCRIBTION : Login , first page of web app-->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KinKonNao™ • Login</title>
+  <link rel="icon" href="./assets/avatar.svg">
+  <!-- Link to global styles -->
+  <link rel="stylesheet" href="./css/styles.css"/>
+  <!-- Link to new, page-specific styles -->
+  <link rel="stylesheet" href="./css/Login.css"/>
+</head>
+<body style="min-height:100vh;background:linear-gradient(180deg,#cfe2ff,#e7f0ff)">
+
+  <div class="split-screen">
+    <div class="left-pane"></div>
+
+    <div class="right-pane">
+      <div class="login-content">
+        <h1 style="font-size:42px;margin:0 0 6px 0;letter-spacing:2px; text-align:left;">KinKonNao™</h1>
+        <h2 style="color:#0354b7;margin:0 0 24px 0;letter-spacing:3px; text-align:left;">LOGIN</h2>
+        <form id="loginForm">       
+          <input class="input" type="email" name="email" placeholder="username" required />
+          <div style="height:10px"></div>       
+          <input class="input" type="password" name="password" placeholder="password" required />
+          <div style="height:18px"></div>
+          <button class="btn" style="width:100%;background:#9ca3af;color:white">LOGIN</button>
+        </form>
+        <div class="separator">OR</div>
+        <button class="btn" style="width:100%;background:#f3f4f6">REGISTER</button>
+        <div class="small" style="margin-top:58px;text-align:right"><em>"Foodie is goodie,<br/> Family loves food."</em></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast"></div>
+
+  <script>
+    function _genToken(){ return btoa(String(Math.random()).slice(2)+'.'+Date.now()); }
+    document.getElementById('loginForm').addEventListener('submit', (e)=>{
+      e.preventDefault();
+      const email = e.target.email.value.trim();
+      const password = e.target.password.value;
+      if(!email || !password){ alert('กรอกให้ครบ'); return; }
+      const user = {
+        id: 'U-' + Math.random().toString(36).slice(2,8),
+        name: email.split('@')[0],
+        email,
+        householdId: 'H-1001',
+        token: _genToken(),
+        expiresAt: Date.now() + 1000*60*60*8
+      };
+      localStorage.setItem('fs_auth', JSON.stringify(user));
+      location.href = './pages/ingredient-form.html';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!--
+  KinKonNao™ — Profile & Household Page
+  บทบาทหน้า:
+    - แสดงข้อมูลผู้ใช้ (name/email/household), เปลี่ยน display name/อวตาร
+    - จัดการ Household (สร้าง, แสดงสมาชิก, invite code, join ด้วยโค้ด)
+    - ปุ่ม logout (ลิงก์ไป Login.html)
+  สคริปต์ที่ใช้:
+    - js/apiConfig.js, js/auth.js, js/nav.js, js/api.js, js/profile.js
+  องค์ประกอบสำคัญ:
+    - #name, #email, #household, #displayName, #avatarInput, #memberList, #inviteDisplay, #joinCode
+-->
+
+<!--DESCRIBTION : profile of user and Household management-->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KinKonNao™ • Profile</title>
+  <link rel="icon" href="../assets/avatar.svg">
+  <link rel="stylesheet" href="../css/styles.css"/>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="card" style="position:relative">
+      <div style="display:flex;justify-content:center;margin-top:-40px;margin-bottom:12px">
+        <img src="../assets/avatar.svg" id="profileAvatarBig" class="avatar-big" style="width:80px;height:80px;border-radius:999px;border:4px solid #eef2ff"/>
+      </div>
+      <div class="grid-2">
+        <div>
+          <label>Name</label><div id="name" class="badge"></div>
+        </div>
+        <div>
+          <label>Email</label><div id="email" class="badge"></div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:12px">
+        <div>
+          <label>Your Household ID</label><div id="household" class="badge house"></div>
+        </div>
+        <div>
+          <label>Display Name</label>
+          <input class="input" id="displayName" placeholder="Your name"/>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:12px;">
+        <div>
+          <label>Edit profile picture</label>
+          <input class="input" id="avatarInput" type="file" accept="image/*"/>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px;border:1px solid transparent;background:linear-gradient(#fff,#fff) padding-box,linear-gradient(120deg,#00b35a,#22c55e,#3b82f6,#a855f7,#ff6a00) border-box;border-radius:20px">
+        <h3>Household Sharing</h3>
+        <div class="grid-2">
+          <div>
+            <div style="margin-top:8px"><button id="createHousehold" class="btn brand">Create Household</button></div>
+          </div>
+          <div>
+            <label>Invite / Join</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">           
+              <input class="input" id="joinCode" placeholder="Enter Invite Code"/>
+              <button id="joinBtn" class="btn">Join</button>
+              <button id="showInvite" class="btn accent">Get Invite Code</button>
+            </div>
+            <div class="small" id="inviteDisplay" style="margin-top:6px"></div>
+          </div>
+        </div>
+        <hr/>
+        <h4>Members</h4>
+        <div id="memberList" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:center;margin-top:16px">
+    <a href="../Login.html" id="logout" class="btn" style="background:#9ca3af;color:white">logout</a>
+  </div>
+
+  <script src="../js/apiConfig.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/nav.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/profile.js"></script>
+</body>
+</html>
