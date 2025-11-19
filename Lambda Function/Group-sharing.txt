@@ -334,16 +334,19 @@ async function joinGroup(event) {
       new UpdateItemCommand({
         TableName: TABLES.USERS,
         Key: marshall({ UserID: userId }),
-        UpdateExpression: "SET Groups = list_append(if_not_exists(Groups, :empty), :group)",
+        UpdateExpression:
+          "SET Groups = list_append(if_not_exists(Groups, :empty), :group), PrimaryGroupID = :gid",
         ExpressionAttributeValues: marshall({
           ":empty": [],
           ":group": [groupId],
+          ":gid": groupId,
         }),
       })
     );
   } catch (err) {
     console.warn("Failed to update user groups:", err);
   }
+
 
   return response(200, {
     message: "Successfully joined group",
@@ -523,15 +526,22 @@ async function removeMember(event) {
     return response(403, { error: "Not a member of this group" });
   }
 
-  if (requesterMember.Role !== "owner" && requesterMember.Role !== "admin") {
-    return response(403, { error: "Only owner/admin can remove members" });
+  // อนุญาตให้ "เจ้าตัว" ลบตัวเองออก หรือ owner/admin ลบคนอื่น
+  if (requesterId !== targetUserId &&
+      requesterMember.Role !== "owner" &&
+      requesterMember.Role !== "admin") {
+    return response(403, { error: "Only owner/admin can remove other members" });
   }
 
   const targetMember = await getMembership(groupId, targetUserId);
-  if (targetMember?.Role === "owner") {
+  if (!targetMember) {
+    return response(404, { error: "Member not found" });
+  }
+  if (targetMember.Role === "owner" && requesterId !== targetUserId) {
     return response(400, { error: "Cannot remove group owner" });
   }
 
+  // 1) ลบจาก MEMBERS
   await client.send(
     new DeleteItemCommand({
       TableName: TABLES.MEMBERS,
@@ -539,6 +549,7 @@ async function removeMember(event) {
     })
   );
 
+  // 2) ลด MemberCount ใน GROUPS
   await client.send(
     new UpdateItemCommand({
       TableName: TABLES.GROUPS,
@@ -550,9 +561,29 @@ async function removeMember(event) {
       }),
     })
   );
+  // 3) เคลียร์ PrimaryGroupID ใน KKN-Users ถ้าชี้มาที่ group นี้อยู่
+  try {
+    await client.send(
+      new UpdateItemCommand({
+        TableName: TABLES.USERS,
+        Key: marshall({ UserID: targetUserId }),
+        // ถ้า PrimaryGroupID เป็น group นี้ ให้ลบออก
+        ConditionExpression:
+          "attribute_not_exists(PrimaryGroupID) OR PrimaryGroupID = :gid",
+        UpdateExpression: "REMOVE PrimaryGroupID",
+        ExpressionAttributeValues: marshall({
+          ":gid": groupId,
+        }),
+      })
+    );
+  } catch (err) {
+    console.warn("Failed to clear PrimaryGroupID from user:", err);
+  }
 
   return response(200, { message: "Member removed successfully" });
 }
+
+
 
 async function updatePermissions(event) {
   const requesterId = getUserId(event);
