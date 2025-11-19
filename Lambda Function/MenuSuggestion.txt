@@ -1,0 +1,608 @@
+// ===============================
+// KinKornNao™ Menu Suggestion Lambda (Improved)
+// AI-Powered Recipe Recommendations
+// Node.js 20.x
+// ===============================
+
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  PutItemCommand,
+  QueryCommand,
+} from "@aws-sdk/client-dynamodb";
+
+const client = new DynamoDBClient({ region: "us-east-1" });
+const INVENTORY_TABLE = "KKN-Inventory";
+const CACHE_TABLE = "KKN-SuggestionCache";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+// ===============================
+// Response helper
+// ===============================
+function response(statusCode, body) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    },
+    body: JSON.stringify(body),
+  };
+}
+
+// ===============================
+// Get user's ingredients
+// ===============================
+async function getUserIngredients(ownerId) {
+  console.log("📦 Getting ingredients for owner:", ownerId);
+
+  const data = await client.send(
+    new QueryCommand({
+      TableName: INVENTORY_TABLE,
+      KeyConditionExpression: "OwnerId = :o",
+      ExpressionAttributeValues: {
+        ":o": { S: ownerId },
+      },
+    })
+  );
+
+  const items = (data.Items || []).map((i) => ({
+    name: i.Name?.S || "",
+    category: i.Category?.S || "",
+    quantity: Number(i.Quantity?.N || 0),
+    unit: i.Unit?.S || "",
+    expiryDate: i.ExpiryDate?.S || "",
+    status: i.Status?.S || "valid",
+  }));
+
+  // Filter only valid items
+  const validItems = items.filter(i => i.status === "valid" && i.name);
+
+  console.log(`✅ Found ${validItems.length} valid ingredients`);
+  return validItems;
+}
+
+// ===============================
+// Check cache
+// ===============================
+async function checkCache(ownerId) {
+  console.log("🔍 Checking cache for owner:", ownerId);
+
+  try {
+    const data = await client.send(
+      new GetItemCommand({
+        TableName: CACHE_TABLE,
+        Key: {
+          OwnerId: { S: ownerId },
+        },
+      })
+    );
+
+    if (!data.Item) {
+      console.log("❌ No cache found");
+      return null;
+    }
+
+    const cachedAt = data.Item.CachedAt?.S;
+    const ttl = 300000; // 5 minutes (สำหรับ testing)
+    const age = Date.now() - new Date(cachedAt).getTime();
+
+    if (age > ttl) {
+      console.log("⏰ Cache expired (age:", Math.round(age/60000), "minutes)");
+      return null;
+    }
+
+    console.log("✅ Cache hit! (age:", Math.round(age/60000), "minutes)");
+    return JSON.parse(data.Item.Suggestions?.S || "[]");
+  } catch (error) {
+    console.warn("⚠️ Cache check error:", error.message);
+    return null;
+  }
+}
+
+// ===============================
+// Save to cache
+// ===============================
+async function saveCache(ownerId, suggestions) {
+  console.log("💾 Saving to cache for owner:", ownerId);
+
+  try {
+    await client.send(
+      new PutItemCommand({
+        TableName: CACHE_TABLE,
+        Item: {
+          OwnerId: { S: ownerId },
+          Suggestions: { S: JSON.stringify(suggestions) },
+          CachedAt: { S: new Date().toISOString() },
+          TTL: { N: String(Math.floor(Date.now() / 1000) + 3600) },
+        },
+      })
+    );
+    console.log("✅ Cache saved successfully");
+  } catch (error) {
+    console.warn("⚠️ Failed to save cache:", error.message);
+  }
+}
+
+// ===============================
+// Call Claude API for suggestions
+// ===============================
+async function getAISuggestions(ingredients) {
+  console.log("🤖 Calling Claude API for suggestions...");
+
+  // ⚠️ TEMPORARY: Skip API call if no credits
+  // Remove this when API key has credits
+  if (!ANTHROPIC_API_KEY || ANTHROPIC_API_KEY === "SKIP_FOR_NOW") {
+    console.warn("⚠️ Skipping Claude API (no credits or disabled)");
+    return getFallbackSuggestions(ingredients);
+  }
+
+  // Prepare ingredient list
+  const ingredientList = ingredients
+    .map((i) => {
+      const expiry = i.expiryDate ? new Date(i.expiryDate) : null;
+      const daysLeft = expiry ? Math.ceil((expiry - new Date()) / 86400000) : null;
+      const expiryText = daysLeft !== null ? `หมดอายุในอีก ${daysLeft} วัน` : "ไม่ระบุวันหมดอายุ";
+      return `- ${i.name} (${i.quantity} ${i.unit}, ${expiryText}, หมวด: ${i.category || "ไม่ระบุ"})`;
+    })
+    .join("\n");
+
+  const prompt = `คุณเป็นเชฟมืออาชีพที่เชี่ยวชาญอาหารไทยและอาหารนานาชาติ ผู้ใช้มีวัตถุดิบต่อไปนี้ในตู้เย็น:
+
+${ingredientList}
+
+กรุณาแนะนำ 3-5 เมนูอาหารที่ทำได้จากวัตถุดิบเหล่านี้ โดยคำนึงถึง:
+1. ✅ ใช้วัตถุดิบที่ใกล้หมดอายุก่อน (เพื่อลด food waste)
+2. ⏱️ เมนูควรทำง่าย ใช้เวลาไม่เกิน 45 นาที
+3. 🏠 เหมาะกับการทำที่บ้าน ไม่ซับซ้อน
+4. 🍽️ ให้ทั้งเมนูไทยและสากล หลากหลาย
+
+**สำคัญมาก: ตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่น ไม่ต้องมี markdown code block**
+
+รูปแบบ JSON ที่ต้องการ:
+{
+  "suggestions": [
+    {
+      "title": "ชื่อเมนูภาษาไทย",
+      "time": 15,
+      "difficulty": "ง่าย",
+      "ingredients": [
+        {"name": "ชื่อวัตถุดิบ", "qty": "2 ช้อนโต๊ะ"}
+      ],
+      "steps": [
+        "ขั้นตอนที่ 1 อธิบายชัดเจน",
+        "ขั้นตอนที่ 2",
+        "ขั้นตอนที่ 3"
+      ],
+      "matchedIngredients": ["วัตถุดิบที่มีอยู่แล้วในตู้เย็น"],
+      "additionalIngredients": ["วัตถุดิบที่ต้องซื้อเพิ่ม (ถ้ามี)"]
+    }
+  ]
+}
+
+หมายเหตุ:
+- difficulty ต้องเป็นหนึ่งใน: "ง่าย", "ปานกลาง", "ยาก"
+- time เป็นจำนวนนาที (ตัวเลข)
+- ตอบเป็น valid JSON เท่านั้น`;
+
+  try {
+    console.log("📤 Sending request to Claude API...");
+    console.log("🔑 API Key (first 10 chars):", ANTHROPIC_API_KEY?.substring(0, 10) + "...");
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second timeout
+    
+    const apiResponse = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4096,
+        temperature: 0.7,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      }),
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeoutId));
+
+    console.log("📥 Response status:", apiResponse.status);
+
+    if (!apiResponse.ok) {
+      const errorText = await apiResponse.text();
+      console.error("❌ Claude API error:", apiResponse.status, errorText);
+      throw new Error(`API error: ${apiResponse.status} - ${errorText}`);
+    }
+
+    const data = await apiResponse.json();
+    console.log("📥 Claude API response received");
+
+    const content = data.content?.[0]?.text;
+    if (!content) {
+      throw new Error("No content in API response");
+    }
+
+    console.log("📄 Raw response length:", content.length);
+
+    // Try to extract JSON from response
+    let jsonText = content.trim();
+    
+    // Remove markdown code blocks if present
+    jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
+    
+    // Find JSON object
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error("❌ No JSON found in response");
+      console.log("Response preview:", content.substring(0, 200));
+      throw new Error("Invalid response format - no JSON found");
+    }
+
+    const result = JSON.parse(jsonMatch[0]);
+    
+    if (!result.suggestions || !Array.isArray(result.suggestions)) {
+      throw new Error("Invalid response structure - missing suggestions array");
+    }
+
+    console.log(`✅ Generated ${result.suggestions.length} suggestions`);
+    
+    // Validate and clean suggestions
+    const validSuggestions = result.suggestions
+      .filter(s => s.title && s.ingredients && s.steps)
+      .map(s => ({
+        title: s.title,
+        time: Number(s.time) || 20,
+        difficulty: ["ง่าย", "ปานกลาง", "ยาก"].includes(s.difficulty) ? s.difficulty : "ปานกลาง",
+        ingredients: Array.isArray(s.ingredients) ? s.ingredients : [],
+        steps: Array.isArray(s.steps) ? s.steps : [],
+        matchedIngredients: Array.isArray(s.matchedIngredients) ? s.matchedIngredients : [],
+        additionalIngredients: Array.isArray(s.additionalIngredients) ? s.additionalIngredients : []
+      }));
+
+    console.log(`✅ Validated ${validSuggestions.length} suggestions`);
+    
+    return validSuggestions;
+
+  } catch (error) {
+    console.error("❌ AI suggestion error:", error.message);
+    console.error("Stack:", error.stack);
+    return getFallbackSuggestions(ingredients);
+  }
+}
+
+// ===============================
+// Fallback suggestions
+// ===============================
+function getFallbackSuggestions(ingredients) {
+  console.log("🔄 Using smart fallback suggestions based on ingredients");
+
+  const suggestions = [];
+  
+  // Analyze available ingredients
+  const hasEggs = ingredients.some((i) => 
+    i.name.toLowerCase().includes("ไข่") || 
+    i.name.toLowerCase().includes("egg")
+  );
+  
+  const hasRice = ingredients.some((i) => 
+    i.name.toLowerCase().includes("ข้าว") || 
+    i.name.toLowerCase().includes("rice")
+  );
+  
+  const veggies = ingredients.filter((i) => 
+    i.category === "ผัก" || 
+    i.category.toLowerCase().includes("vegetable") ||
+    i.name.toLowerCase().includes("คะน้า") ||
+    i.name.toLowerCase().includes("ผัก")
+  );
+  
+  const proteins = ingredients.filter((i) => 
+    i.category === "โปรตีน" || 
+    i.category.toLowerCase().includes("protein") ||
+    i.name.toLowerCase().includes("หมู") ||
+    i.name.toLowerCase().includes("ไก่") ||
+    i.name.toLowerCase().includes("pork") ||
+    i.name.toLowerCase().includes("chicken") ||
+    i.name.toLowerCase().includes("เนื้อ")
+  );
+
+  const hasPork = proteins.some(p => p.name.toLowerCase().includes("หมู") || p.name.toLowerCase().includes("pork"));
+  const hasKale = veggies.some(v => v.name.toLowerCase().includes("คะน้า") || v.name.toLowerCase().includes("kale"));
+
+  console.log(`📊 Analysis: ${hasEggs ? '✅' : '❌'} Eggs, ${hasPork ? '✅' : '❌'} Pork, ${hasKale ? '✅' : '❌'} Kale`);
+
+  // Suggestion 1: ผัดคะน้าหมูกรอบ (if have both)
+  if (hasPork && hasKale) {
+    suggestions.push({
+      title: "ผัดคะน้าหมูกรอบ",
+      time: 20,
+      difficulty: "ปานกลาง",
+      ingredients: [
+        { name: "หมู", qty: "200 กรัม" },
+        { name: "ผักคะน้า", qty: "200 กรัม" },
+        { name: "กระเทียม", qty: "3 กลีบ" },
+        { name: "ซอสหอยนางรม", qty: "2 ช้อนโต๊ะ" },
+        { name: "น้ำมัน", qty: "3 ช้อนโต๊ะ" },
+      ],
+      steps: [
+        "หั่นหมูเป็นชิ้นบางๆ หั่นผักคะน้า สับกระเทียม",
+        "ตั้งกระทะใส่น้ำมันให้ร้อนจัด ทอดหมูจนกรอบ ตักขึ้น",
+        "ใช้น้ำมันเดิม ผัดกระเทียมให้หอม",
+        "ใส่ผักคะน้าลงผัด ปรุงรสด้วยซอสหอยนางรม",
+        "ใส่หมูกรอบลงคลุก ตักใส่จาน"
+      ],
+      matchedIngredients: ["หมู", "ผักคะน้า"],
+      additionalIngredients: ["กระเทียม", "ซอสหอยนางรม", "น้ำมัน"]
+    });
+  }
+
+  // Suggestion 2: ข้าวผัดหมู (if have pork and eggs)
+  if (hasPork && hasEggs) {
+    suggestions.push({
+      title: "ข้าวผัดหมู",
+      time: 15,
+      difficulty: "ง่าย",
+      ingredients: [
+        { name: "ข้าวสวย", qty: "2 จาน" },
+        { name: "หมูสับ", qty: "100 กรัม" },
+        { name: "ไข่", qty: "2 ฟอง" },
+        { name: "ซอสปรุงรส", qty: "2 ช้อนโต๊ะ" },
+        { name: "น้ำมัน", qty: "2 ช้อนโต๊ะ" },
+      ],
+      steps: [
+        "ตั้งกระทะใส่น้ำมันให้ร้อน",
+        "ใส่ไข่ลงตี แล้วใส่หมูสับลงผัด",
+        "ใส่ข้าวลงผัดให้เข้ากัน",
+        "ปรุงรสด้วยซอสปรุงรส",
+        "ตักใส่จาน โรยต้นหอม"
+      ],
+      matchedIngredients: ["หมู", "ไข่"],
+      additionalIngredients: ["ข้าวสวย", "ซอสปรุงรส", "น้ำมัน"]
+    });
+  }
+
+  // Suggestion 3: Omelet
+  if (hasEggs) {
+    const eggItem = ingredients.find(i => 
+      i.name.toLowerCase().includes("ไข่") || 
+      i.name.toLowerCase().includes("egg")
+    );
+    
+    suggestions.push({
+      title: "ไข่เจียว",
+      time: 10,
+      difficulty: "ง่าย",
+      ingredients: [
+        { name: "ไข่", qty: "2 ฟอง" },
+        { name: "น้ำมัน", qty: "3 ช้อนโต๊ะ" },
+        { name: "ซอสปรุงรส", qty: "เล็กน้อย" },
+      ],
+      steps: [
+        "ตีไข่ให้เข้ากัน ใส่ซอสปรุงรสเล็กน้อย",
+        "ตั้งกระทะใส่น้ำมัน ให้ร้อนจัด",
+        "เทไข่ลงไป รอจนสุกเหลือง",
+        "พลิกอีกด้าน สักครู่จึงตักขึ้น",
+        "เสิร์ฟร้อนๆ กับข้าวสวย"
+      ],
+      matchedIngredients: [eggItem ? eggItem.name : "ไข่"],
+      additionalIngredients: ["น้ำมัน", "ซอสปรุงรส"]
+    });
+  }
+
+  // Suggestion 4: ต้มจืดผัก (if have vegetables)
+  if (veggies.length > 0) {
+    suggestions.push({
+      title: "ต้มจืดผักรวม",
+      time: 15,
+      difficulty: "ง่าย",
+      ingredients: [
+        { name: veggies[0].name, qty: "200 กรัม" },
+        { name: "เต้าหู้", qty: "1 แผ่น" },
+        { name: "กระเทียม", qty: "2 กลีบ" },
+        { name: "น้ำซุป", qty: "3 ถ้วย" },
+      ],
+      steps: [
+        "ตั้งหม้อน้ำให้เดือด ใส่กระเทียมทุบ",
+        "ใส่เต้าหู้หั่นลงไป",
+        "ใส่ผักลงต้ม",
+        "ปรุงรสตามชอบ",
+        "ตักใส่ชาม พร้อมเสิร์ฟ"
+      ],
+      matchedIngredients: veggies.map(v => v.name),
+      additionalIngredients: ["เต้าหู้", "กระเทียม", "น้ำซุป"]
+    });
+  }
+
+  // Suggestion 5: ผัดกะเพรา (if have protein)
+  if (proteins.length > 0) {
+    suggestions.push({
+      title: "ผัดกะเพราหมู",
+      time: 20,
+      difficulty: "ปานกลาง",
+      ingredients: [
+        { name: proteins[0].name, qty: "200 กรัม" },
+        { name: "กะเพรา", qty: "1 กำมือ" },
+        { name: "พริก", qty: "5 เม็ด" },
+        { name: "กระเทียม", qty: "3 กลีบ" },
+        { name: "ซอสปรุงรส", qty: "2 ช้อนโต๊ะ" },
+      ],
+      steps: [
+        "โขลกพริกกระเทียมให้แหลก",
+        "ตั้งกระทะใส่น้ำมัน ผัดพริกกระเทียมให้หอม",
+        `ใส่${proteins[0].name}ลงผัดจนสุก`,
+        "ปรุงรสตามชอบ",
+        "ใส่กะเพราคลุกเคล้า ปิดไฟ",
+        "ตักใส่จาน เสิร์ฟกับข้าวสวยและไข่ดาว"
+      ],
+      matchedIngredients: [proteins[0].name],
+      additionalIngredients: ["กะเพรา", "พริก", "กระเทียม", "ซอสปรุงรส"]
+    });
+  }
+
+  // Default if nothing matches
+  if (suggestions.length === 0) {
+    suggestions.push({
+      title: "ข้าวผัดไข่",
+      time: 15,
+      difficulty: "ง่าย",
+      ingredients: [
+        { name: "ข้าวสวย", qty: "2 จาน" },
+        { name: "ไข่", qty: "2 ฟอง" },
+        { name: "น้ำมัน", qty: "2 ช้อนโต๊ะ" },
+      ],
+      steps: [
+        "ตั้งกระทะให้ร้อน ใส่น้ำมัน",
+        "ใส่ไข่ลงไปตีให้กระจาย",
+        "ใส่ข้าวลงผัดจนเข้ากัน",
+        "ปรุงรสตามชอบ",
+        "ตักใส่จาน พร้อมเสิร์ฟ"
+      ],
+      matchedIngredients: [],
+      additionalIngredients: ["ข้าวสวย", "ไข่", "น้ำมัน"]
+    });
+  }
+
+  console.log(`✅ Generated ${suggestions.length} smart fallback suggestions`);
+  return suggestions;
+}
+
+// ===============================
+// MAIN HANDLER
+// ===============================
+export const handler = async (event) => {
+  console.log("🚀 Lambda invoked");
+  console.log("EVENT:", JSON.stringify(event, null, 2));
+
+  const method = event.requestContext?.http?.method || event.httpMethod;
+  const rawPath = event.requestContext?.http?.path || event.path || "";
+
+  console.log("Method:", method, "Path:", rawPath);
+
+  // Handle CORS preflight
+  if (method === "OPTIONS") {
+    return response(200, { message: "CORS OK" });
+  }
+
+  try {
+    // GET /suggestions?ownerId=xxx
+    if (method === "GET" && rawPath === "/suggestions") {
+      const ownerId =
+        event.queryStringParameters?.ownerId ||
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"];
+
+      console.log("📋 GET /suggestions - OwnerId:", ownerId);
+
+      if (!ownerId) {
+        return response(400, { error: "Missing ownerId parameter" });
+      }
+
+      // Check cache first
+      const cached = await checkCache(ownerId);
+      if (cached && cached.length > 0) {
+        console.log("✅ Returning cached suggestions");
+        return response(200, {
+          suggestions: cached,
+          fromCache: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Get user's ingredients
+      const ingredients = await getUserIngredients(ownerId);
+
+      if (ingredients.length === 0) {
+        console.log("⚠️ No ingredients found");
+        return response(200, {
+          suggestions: [],
+          message: "ยังไม่มีวัตถุดิบในตู้เย็น กรุณาเพิ่มวัตถุดิบก่อนใช้งาน",
+          fromCache: false
+        });
+      }
+
+      // Get AI suggestions
+      const suggestions = await getAISuggestions(ingredients);
+
+      // Save to cache (even fallback)
+      if (suggestions.length > 0) {
+        await saveCache(ownerId, suggestions);
+      }
+
+      return response(200, {
+        suggestions,
+        fromCache: false,
+        ingredientCount: ingredients.length,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // POST /suggestions/refresh - Force refresh
+    if (method === "POST" && rawPath === "/suggestions/refresh") {
+      const ownerId =
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"] ||
+        (event.body ? JSON.parse(event.body).ownerId : null);
+
+      console.log("🔄 POST /suggestions/refresh - OwnerId:", ownerId);
+
+      if (!ownerId) {
+        return response(400, { error: "Missing ownerId" });
+      }
+
+      const ingredients = await getUserIngredients(ownerId);
+
+      if (ingredients.length === 0) {
+        return response(200, {
+          suggestions: [],
+          message: "ยังไม่มีวัตถุดิบในตู้เย็น",
+          fromCache: false
+        });
+      }
+
+      // Force new AI generation
+      const suggestions = await getAISuggestions(ingredients);
+      
+      if (suggestions.length > 0) {
+        await saveCache(ownerId, suggestions);
+      }
+
+      return response(200, {
+        suggestions,
+        fromCache: false,
+        refreshed: true,
+        ingredientCount: ingredients.length,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Route not found
+    return response(404, {
+      error: "Route not found",
+      method,
+      path: rawPath,
+      availableRoutes: [
+        "GET /suggestions?ownerId=xxx",
+        "POST /suggestions/refresh"
+      ]
+    });
+
+  } catch (err) {
+    console.error("❌ ERROR:", err);
+    console.error("Stack:", err.stack);
+    
+    return response(500, {
+      error: "Internal server error",
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+};

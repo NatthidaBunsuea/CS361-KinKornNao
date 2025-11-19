@@ -1,0 +1,234 @@
+import {
+  DynamoDBClient,
+  ScanCommand,
+  PutItemCommand,
+  QueryCommand,
+} from "@aws-sdk/client-dynamodb";
+import {
+  CognitoIdentityProviderClient,
+  AdminGetUserCommand,
+} from "@aws-sdk/client-cognito-identity-provider";
+import {
+  SNSClient,
+  PublishCommand,
+  SubscribeCommand,
+  ListSubscriptionsByTopicCommand,
+} from "@aws-sdk/client-sns";
+
+/* ===== CONFIG จาก Environment ===== */
+const region = process.env.AWS_REGION || "us-east-1";
+
+const inventoryTable =
+  process.env.INVENTORY_TABLE || "KKN-Inventory";        
+const logTable =
+  process.env.NOTI_LOG_TABLE || "KKN-NotificationLog";     
+const userPoolId =
+  process.env.USER_POOL_ID || "us-east-1_7OWzCRhFJ";       
+const topicArn =
+  process.env.EXPIRY_TOPIC_ARN ||
+  "arn:aws:sns:us-east-1:905418263792:KKN";      
+const DAILY_EMAIL_LIMIT = Number(process.env.DAILY_EMAIL_LIMIT || "10");
+/* ================================== */
+
+const ddb = new DynamoDBClient({ region });
+const cognito = new CognitoIdentityProviderClient({ region });
+const sns = new SNSClient({ region });
+
+/**
+ * เช็กว่า email นี้ subscribe กับ topic แล้วหรือยัง
+ * ถ้ายัง → subscribe ใหม่
+ */
+async function ensureEmailSubscription(email) {
+  if (!email) return;
+
+  const existing = await sns.send(
+    new ListSubscriptionsByTopicCommand({
+      TopicArn: topicArn,
+    })
+  );
+
+  const hasSub =
+    existing.Subscriptions &&
+    existing.Subscriptions.some(
+      (sub) => sub.Endpoint === email && sub.Protocol === "email"
+    );
+
+  if (!hasSub) {
+    console.log(`Subscribe email ${email} to ${topicArn}`);
+    await sns.send(
+      new SubscribeCommand({
+        TopicArn: topicArn,
+        Protocol: "email",
+        Endpoint: email,
+      })
+    );
+  }
+}
+
+/**
+ * นับจำนวนเมลที่ userId ได้รับในวันนี้
+ */
+async function getTodayEmailCount(userId, today) {
+  console.log("getTodayEmailCount: start", { userId, today });
+
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: logTable,
+      KeyConditionExpression:
+        "UserID = :uid AND begins_with(ExpiryKey, :date)",
+      ExpressionAttributeValues: {
+        ":uid": { S: userId },
+        ":date": { S: today + "#email" },
+      },
+    })
+  );
+
+  console.log("getTodayEmailCount: result.Count =", result.Count);
+  return result.Count || 0;
+}
+
+/**
+ * บันทึก log ว่าส่งเมลให้ userId แล้วลำดับที่เท่าไหร่ของวัน
+ */
+async function logEmailSent(userId, today, sequence) {
+  const nowIso = new Date().toISOString();
+  const key = `${today}#email#${String(sequence).padStart(2, "0")}`;
+
+  console.log("logEmailSent: writing", {
+    userId,
+    key,
+    nowIso,
+    table: logTable,
+  });
+
+  try {
+    await ddb.send(
+      new PutItemCommand({
+        TableName: logTable,
+        Item: {
+          UserID: { S: userId },
+          ExpiryKey: { S: key },
+          SentAt: { S: nowIso },
+        },
+      })
+    );
+    console.log("logEmailSent: SUCCESS", { userId, key });
+  } catch (err) {
+    console.error("logEmailSent: FAILED", { userId, key }, err);
+  }
+}
+
+/**
+ * ฟังก์ชันหลัก
+ */
+export const handler = async (event) => {
+  const now = new Date();
+  const today = now.toISOString().split("T")[0];
+  const in3Days = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split("T")[0];
+
+  // 1) ดึงรายการวัตถุดิบทั้งหมด
+  const scanResult = await ddb.send(
+    new ScanCommand({
+      TableName: inventoryTable,
+    })
+  );
+
+  // grouped[userId] = ["item1 (...)", "item2 (...)"]
+  const grouped = {};
+
+  for (const item of scanResult.Items || []) {
+    const expiry = item.ExpiryDate && item.ExpiryDate.S;
+
+    // เปลี่ยนมาใช้ OwnerId แทน UserID
+    const userId = item.OwnerId && item.OwnerId.S;      // <-- แก้จุดนี้
+
+    if (!expiry || !userId) continue;
+
+    let type = null;
+    if (expiry === today) {
+      type = "expired";
+    } else if (expiry === in3Days) {
+      type = "warning-3d";
+    }
+
+    if (!type) continue;
+
+    if (!grouped[userId]) grouped[userId] = [];
+
+    const alertText =
+      type === "expired" ? "หมดอายุแล้ว" : "จะหมดอายุในอีก 3 วัน";
+
+    const name = (item.Name && item.Name.S) || "ไม่ทราบชื่อ"; // <-- แก้จุดนี้
+
+    grouped[userId].push(`${name} (${alertText}: ${expiry})`);
+  }
+
+
+  // 2) loop ทีละ user แล้วส่งเมลถ้ายังไม่เกิน limit
+  for (const userId of Object.keys(grouped)) {
+    try {
+      // 2.1 ดึงข้อมูล user จาก Cognito
+      const user = await cognito.send(
+        new AdminGetUserCommand({
+          Username: userId,
+          UserPoolId: userPoolId,
+        })
+      );
+
+      const emailAttr =
+        user.UserAttributes &&
+        user.UserAttributes.find((attr) => attr.Name === "email");
+      const email = emailAttr && emailAttr.Value;
+
+      if (!email) {
+        console.log(`User ${userId} ไม่มี email ใน Cognito`);
+        continue;
+      }
+
+      // 2.2 subscribe email เข้ากับ SNS topic (ถ้ายังไม่เคย)
+      await ensureEmailSubscription(email);
+
+      // 2.3 เช็ก daily limit
+      const currentCount = await getTodayEmailCount(userId, today);
+      if (currentCount >= DAILY_EMAIL_LIMIT) {
+        console.log(
+          `User ${userId} เกิน daily limit แล้ว (${currentCount}/${DAILY_EMAIL_LIMIT})`
+        );
+        continue;
+      }
+
+      // 2.4 เตรียมข้อความที่จะส่ง
+      const message =
+        "📦 รายการวัตถุดิบของคุณที่หมดอายุ/ใกล้หมดอายุ:\n\n" +
+        grouped[userId].join("\n") +
+        "\n\nกรุณาใช้ก่อนที่จะเสียนะคะ";
+
+      // 2.5 ส่ง SNS → Email
+      await sns.send(
+        new PublishCommand({
+          TopicArn: topicArn,
+          Message: message,
+          Subject: "แจ้งเตือนวัตถุดิบใกล้หมดอายุ",
+        })
+      );
+
+      // 2.6 บันทึก log
+      await logEmailSent(userId, today, currentCount + 1);
+
+      console.log(
+        `✅ ส่งอีเมลหา ${email} แล้ว (ลำดับที่ ${
+          currentCount + 1
+        } ของวันนี้)`
+      );
+    } catch (err) {
+      console.error(`❌ Error for ${userId}:`, err && err.message, err);
+    }
+  }
+
+  return {
+    statusCode: 200,
+    body: "Expiry SNS alert completed with daily email limit",
+  };
+};

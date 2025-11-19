@@ -1,0 +1,332 @@
+// ===============================
+// KinKornNao™ Inventory Lambda
+// Node.js 20.x – No npm packages needed
+// FIXED VERSION with better routing
+// ===============================
+
+import crypto from "node:crypto";
+import {
+  DynamoDBClient,
+  PutItemCommand,
+  GetItemCommand,
+  UpdateItemCommand,
+  DeleteItemCommand,
+  QueryCommand,
+} from "@aws-sdk/client-dynamodb";
+
+const uuidv4 = () => crypto.randomUUID();
+const client = new DynamoDBClient({ region: "us-east-1" });
+const TABLE_NAME = "KKN-Inventory";
+
+// ===============================
+// Response helper
+// ===============================
+function response(statusCode, body) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    },
+    body: JSON.stringify(body),
+  };
+}
+
+// ===============================
+// MAIN HANDLER
+// ===============================
+export const handler = async (event) => {
+  console.log("EVENT:", JSON.stringify(event, null, 2));
+
+  // Extract HTTP method and path
+  const http = event.requestContext?.http || {};
+  const method = http.method || event.httpMethod;
+  const rawPath = http.path || event.path || event.rawPath || "";
+  const routeKey = event.routeKey || `${method} ${rawPath}`;
+
+  console.log("Method:", method);
+  console.log("RawPath:", rawPath);
+  console.log("RouteKey:", routeKey);
+
+  // Handle CORS preflight
+  if (method === "OPTIONS") {
+    return response(200, { message: "CORS OK" });
+  }
+
+  // Extract itemId from path if present
+  const pathMatch = rawPath.match(/\/inventory\/([^\/]+)/);
+  const itemIdFromPath = pathMatch ? pathMatch[1] : null;
+
+  console.log("ItemID from path:", itemIdFromPath);
+
+  try {
+    // --------------------------------------
+    // POST /inventory → create item
+    // --------------------------------------
+    if (method === "POST" && rawPath === "/inventory") {
+      const body = JSON.parse(event.body || "{}");
+
+      const ownerId =
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"] ||
+        body.OwnerId;
+
+      console.log("POST /inventory - OwnerId:", ownerId);
+      console.log("POST /inventory - Body:", body);
+
+      if (!ownerId || !body.Name) {
+        return response(400, { error: "OwnerId and Name required" });
+      }
+
+      const itemId = uuidv4();
+      const now = new Date().toISOString();
+
+      const item = {
+        OwnerId: { S: ownerId },
+        ItemID: { S: itemId },
+
+        Name: { S: body.Name },
+        Category: { S: body.Category ?? "misc" },
+        Quantity: { N: String(body.Quantity ?? 1) },
+        Unit: { S: body.Unit ?? "unit" },
+        ExpiryDate: { S: body.ExpiryDate ?? "" },
+        AddedAt: { S: now },
+        UpdatedAt: { S: now },
+        Status: { S: "valid" },
+        UsedCount: { N: "0" },
+      };
+
+      console.log("Creating item:", item);
+
+      await client.send(
+        new PutItemCommand({
+          TableName: TABLE_NAME,
+          Item: item,
+        })
+      );
+
+      return response(200, {
+        message: "Item added",
+        itemId,
+      });
+    }
+
+    // --------------------------------------
+    // GET /inventory?ownerId=xxx
+    // --------------------------------------
+    if (method === "GET" && rawPath === "/inventory") {
+      const ownerId =
+        event.queryStringParameters?.ownerId ||
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"];
+
+      console.log("GET /inventory - OwnerId:", ownerId);
+
+      if (!ownerId) {
+        return response(400, { error: "Missing ownerId" });
+      }
+
+      const data = await client.send(
+        new QueryCommand({
+          TableName: TABLE_NAME,
+          KeyConditionExpression: "OwnerId = :o",
+          ExpressionAttributeValues: {
+            ":o": { S: ownerId },
+          },
+        })
+      );
+
+      const items =
+        data.Items?.map((i) => ({
+          OwnerId: i.OwnerId.S,
+          ItemID: i.ItemID.S,
+          Name: i.Name.S,
+          Category: i.Category.S,
+          Quantity: Number(i.Quantity.N),
+          Unit: i.Unit.S,
+          ExpiryDate: i.ExpiryDate.S,
+          AddedAt: i.AddedAt.S,
+          UpdatedAt: i.UpdatedAt.S,
+          Status: i.Status.S,
+          UsedCount: Number(i.UsedCount.N),
+        })) ?? [];
+
+      console.log(`GET /inventory - Found ${items.length} items`);
+
+      return response(200, items);
+    }
+
+    // --------------------------------------
+    // GET /inventory/{ItemID}
+    // --------------------------------------
+    if (method === "GET" && itemIdFromPath) {
+      const itemId = itemIdFromPath;
+      const ownerId =
+        event.queryStringParameters?.ownerId ||
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"];
+
+      console.log("GET /inventory/{id} - OwnerId:", ownerId, "ItemID:", itemId);
+
+      if (!ownerId || !itemId) {
+        return response(400, { error: "Missing ownerId or itemId" });
+      }
+
+      const data = await client.send(
+        new GetItemCommand({
+          TableName: TABLE_NAME,
+          Key: {
+            OwnerId: { S: ownerId },
+            ItemID: { S: itemId },
+          },
+        })
+      );
+
+      if (!data.Item) {
+        return response(404, { error: "Item not found" });
+      }
+
+      return response(200, {
+        OwnerId: data.Item.OwnerId.S,
+        ItemID: data.Item.ItemID.S,
+        Name: data.Item.Name.S,
+        Category: data.Item.Category.S,
+        Quantity: Number(data.Item.Quantity.N),
+        Unit: data.Item.Unit.S,
+        ExpiryDate: data.Item.ExpiryDate.S,
+        AddedAt: data.Item.AddedAt.S,
+        UpdatedAt: data.Item.UpdatedAt.S,
+        Status: data.Item.Status.S,
+        UsedCount: Number(data.Item.UsedCount.N),
+      });
+    }
+
+    // --------------------------------------
+    // PUT /inventory/{ItemID} → update item
+    // --------------------------------------
+    if (method === "PUT" && itemIdFromPath) {
+      const itemId = itemIdFromPath;
+      const body = JSON.parse(event.body || "{}");
+
+      const ownerId =
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"] ||
+        body.OwnerId;
+
+      console.log("PUT /inventory/{id} - OwnerId:", ownerId, "ItemID:", itemId);
+      console.log("PUT /inventory/{id} - Body:", body);
+
+      if (!ownerId || !itemId) {
+        return response(400, { error: "Missing OwnerId or ItemID" });
+      }
+
+      const now = new Date().toISOString();
+
+      const expr = [];
+      const names = {};
+      const values = {};
+
+      if (body.Name !== undefined) {
+        expr.push("#n = :n");
+        names["#n"] = "Name";
+        values[":n"] = { S: body.Name };
+      }
+      if (body.Category !== undefined) {
+        expr.push("Category = :c");
+        values[":c"] = { S: body.Category };
+      }
+      if (body.Quantity !== undefined) {
+        expr.push("Quantity = :q");
+        values[":q"] = { N: String(body.Quantity) };
+      }
+      if (body.Unit !== undefined) {
+        expr.push("#u = :u");
+        names["#u"] = "Unit";
+        values[":u"] = { S: body.Unit };
+      }
+      if (body.ExpiryDate !== undefined) {
+        expr.push("ExpiryDate = :e");
+        values[":e"] = { S: body.ExpiryDate };
+      }
+      if (body.Status !== undefined) {
+        expr.push("Status = :s");
+        values[":s"] = { S: body.Status };
+      }
+
+      expr.push("UpdatedAt = :upd");
+      values[":upd"] = { S: now };
+
+      if (expr.length === 1) {
+        return response(400, { error: "No fields to update" });
+      }
+
+      const updateParams = {
+        TableName: TABLE_NAME,
+        Key: {
+          OwnerId: { S: ownerId },
+          ItemID: { S: itemId },
+        },
+        UpdateExpression: "SET " + expr.join(", "),
+        ExpressionAttributeValues: values,
+      };
+
+      // Only add ExpressionAttributeNames if we have names to add
+      if (Object.keys(names).length > 0) {
+        updateParams.ExpressionAttributeNames = names;
+      }
+
+      console.log("Update params:", JSON.stringify(updateParams, null, 2));
+
+      await client.send(new UpdateItemCommand(updateParams));
+
+      return response(200, { message: "Item updated" });
+    }
+
+    // --------------------------------------
+    // DELETE /inventory/{itemId}
+    // --------------------------------------
+    if (method === "DELETE" && itemIdFromPath) {
+      const itemId = itemIdFromPath;
+
+      const ownerId =
+        event.queryStringParameters?.ownerId ||
+        event.headers["x-user-id"] ||
+        event.headers["X-User-Id"];
+
+      console.log("DELETE /inventory/{id} - OwnerId:", ownerId, "ItemID:", itemId);
+
+      if (!ownerId || !itemId) {
+        return response(400, { error: "Missing ownerId or itemId" });
+      }
+
+      await client.send(
+        new DeleteItemCommand({
+          TableName: TABLE_NAME,
+          Key: {
+            OwnerId: { S: ownerId },
+            ItemID: { S: itemId },
+          },
+        })
+      );
+
+      return response(200, { message: "Item deleted" });
+    }
+
+    // ---- Route not matched ----
+    console.log("Route not matched - Method:", method, "Path:", rawPath);
+    return response(404, { 
+      error: "Route not found",
+      method,
+      path: rawPath,
+      routeKey 
+    });
+  } catch (err) {
+    console.error("ERROR:", err);
+    return response(500, {
+      error: "Internal server error",
+      details: err.message,
+    });
+  }
+};

@@ -1,0 +1,174 @@
+// ===============================
+// KKN-CognitoPostConfirmation
+// Auto-create user in DynamoDB
+// Node.js 22.x
+// ===============================
+
+import { 
+  DynamoDBClient, 
+  PutItemCommand, 
+  GetItemCommand 
+} from "@aws-sdk/client-dynamodb";
+import { marshall } from "@aws-sdk/util-dynamodb";
+
+const client = new DynamoDBClient({ region: "us-east-1" });
+
+export const handler = async (event) => {
+  console.log("🚀 Cognito Trigger Event:", JSON.stringify(event, null, 2));
+  
+  const triggerSource = event.triggerSource;
+  const userId = event.request.userAttributes.sub;
+  const email = event.request.userAttributes.email || "";
+  const emailVerified = event.request.userAttributes.email_verified === "true";
+  
+  // ✅ FIXED: Get display name from multiple sources
+  const displayName = getDisplayName(event);
+  
+  // Username from Cognito (UUID or custom)
+  const cognitoUsername = event.userName;
+  
+  console.log("📝 Trigger:", triggerSource);
+  console.log("👤 User Info:");
+  console.log("  - UserID (sub):", userId);
+  console.log("  - Email:", email);
+  console.log("  - DisplayName:", displayName);
+  console.log("  - CognitoUsername:", cognitoUsername);
+  
+  // Process only on sign-up confirmation or first login
+  const shouldCreateUser = 
+    triggerSource === "PostConfirmation_ConfirmSignUp" ||
+    triggerSource === "PostAuthentication_Authentication";
+  
+  if (!shouldCreateUser) {
+    console.log("ℹ️ Trigger not relevant, skipping");
+    return event;
+  }
+  
+  try {
+    // Check if user already exists
+    console.log("🔍 Checking if user exists in DynamoDB...");
+    
+    const existing = await client.send(
+      new GetItemCommand({
+        TableName: "KKN-Users",
+        Key: marshall({ UserID: userId })
+      })
+    );
+    
+    if (existing.Item) {
+      console.log("✅ User already exists in DynamoDB");
+      return event;
+    }
+    
+    // Create new user
+    console.log("📝 Creating new user in DynamoDB...");
+    
+    const userItem = {
+      UserID: userId,
+      Email: email,
+      DisplayName: displayName,
+      CognitoUsername: cognitoUsername,
+      EmailVerified: emailVerified,
+      Groups: [],
+      PrimaryGroupID: null,
+      Preferences: {
+        defaultScope: "personal",
+        notifications: {
+          expiryReminders: true,
+          groupInvites: true
+        }
+      },
+      CreatedAt: new Date().toISOString(),
+      UpdatedAt: new Date().toISOString(),
+      LastLoginAt: new Date().toISOString(),
+      Status: "active"
+    };
+    
+    console.log("📦 User item to create:", JSON.stringify(userItem, null, 2));
+    
+    await client.send(
+      new PutItemCommand({
+        TableName: "KKN-Users",
+        Item: marshall(userItem)
+      })
+    );
+    
+    console.log("✅ User created successfully in DynamoDB");
+    
+  } catch (error) {
+    console.error("❌ Error creating user:", error);
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
+    
+    // Don't fail the authentication
+    // Just log the error and continue
+  }
+  
+  return event;
+};
+
+/**
+ * ดึง DisplayName จากหลายแหล่งตามลำดับความสำคัญ
+ */
+function getDisplayName(event) {
+  const attrs = event.request.userAttributes;
+  
+  // Priority order:
+  // 1. given_name + family_name
+  if (attrs.given_name || attrs.family_name) {
+    const parts = [attrs.given_name, attrs.family_name].filter(Boolean);
+    if (parts.length > 0) {
+      return parts.join(' ');
+    }
+  }
+  
+  // 2. name attribute
+  if (attrs.name && attrs.name !== event.userName) {
+    return attrs.name;
+  }
+  
+  // 3. preferred_username
+  if (attrs.preferred_username && attrs.preferred_username !== event.userName) {
+    return attrs.preferred_username;
+  }
+  
+  // 4. nickname
+  if (attrs.nickname) {
+    return attrs.nickname;
+  }
+  
+  // 5. Email username part (before @)
+  if (attrs.email) {
+    const emailUsername = attrs.email.split('@')[0];
+    // Only use if it's not the UUID
+    if (emailUsername && !emailUsername.includes('-')) {
+      return emailUsername;
+    }
+  }
+  
+  // 6. Last resort: use sub (UserID) - better than UUID
+  return `User-${attrs.sub.slice(0, 8)}`;
+}
+
+/**
+ * Test helper - uncomment to test locally
+ */
+// async function testHandler() {
+//   const testEvent = {
+//     version: "1",
+//     triggerSource: "PostConfirmation_ConfirmSignUp",
+//     userName: "74781438-0061-70ff-48c2-e36e02b0dcef",
+//     request: {
+//       userAttributes: {
+//         sub: "74781438-0061-70ff-48c2-e36e02b0dcef",
+//         email: "koo1212312121@gmail.com",
+//         email_verified: "true"
+//       }
+//     }
+//   };
+//   
+//   await handler(testEvent);
+// }

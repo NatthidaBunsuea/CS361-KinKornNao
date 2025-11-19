@@ -1,0 +1,694 @@
+// ===============================
+// KinKonNao™ Household Sharing Lambda
+// Node.js 22.x - AWS Learner Lab Compatible
+// ===============================
+
+import crypto from "node:crypto";
+import {
+  DynamoDBClient,
+  PutItemCommand,
+  GetItemCommand,
+  UpdateItemCommand,
+  DeleteItemCommand,
+  QueryCommand,
+} from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+
+const client = new DynamoDBClient({ region: "us-east-1" });
+
+const TABLES = {
+  GROUPS: "KKN-Groups",
+  MEMBERS: "KKN-GroupMembers",
+  INVITATIONS: "KKN-GroupInvitations",
+  INVENTORY: "KKN-Inventory",
+  USERS: "KKN-Users",
+};
+
+// ===============================
+// HELPERS
+// ===============================
+
+function response(statusCode, body) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "*",
+    },
+    body: JSON.stringify(body),
+  };
+}
+
+function generateId(prefix) {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function generateInviteCode() {
+  return crypto.randomBytes(4).toString("hex").toUpperCase();
+}
+
+function getUserId(event) {
+  const claims = event.requestContext?.authorizer?.jwt?.claims;
+  if (claims?.sub) return claims.sub;
+
+  const userId = event.headers["x-user-id"] || event.headers["X-User-Id"];
+  if (userId) return userId;
+
+  throw new Error("Unauthorized: Missing user ID");
+}
+
+async function getMembership(groupId, userId) {
+  const result = await client.send(
+    new GetItemCommand({
+      TableName: TABLES.MEMBERS,
+      Key: marshall({ GroupID: groupId, UserID: userId }),
+    })
+  );
+  return result.Item ? unmarshall(result.Item) : null;
+}
+
+async function checkPermission(groupId, userId, action) {
+  const member = await getMembership(groupId, userId);
+
+  if (!member || member.Status !== "active") {
+    throw new Error("Not a member of this group");
+  }
+
+  const permissionMap = {
+    addItem: "canAddItems",
+    editItem: "canEditItems",
+    deleteItem: "canDeleteItems",
+    inviteMember: "canInviteMembers",
+    viewAnalytics: "canViewAnalytics",
+  };
+
+  const requiredPerm = permissionMap[action];
+  if (requiredPerm && !member.Permissions?.[requiredPerm]) {
+    throw new Error(`Permission denied: ${action}`);
+  }
+
+  return member;
+}
+
+// ===============================
+// ROUTE HANDLERS
+// ===============================
+
+async function createGroup(event) {
+  const userId = getUserId(event);
+  const body = JSON.parse(event.body || "{}");
+  const { groupName, maxMembers = 10 } = body;
+
+  if (!groupName?.trim()) {
+    return response(400, { error: "Group name is required" });
+  }
+
+  const groupId = generateId("GROUP");
+  const inviteCode = generateInviteCode();
+  const now = new Date().toISOString();
+
+  await client.send(
+    new PutItemCommand({
+      TableName: TABLES.GROUPS,
+      Item: marshall({
+        GroupID: groupId,
+        GroupName: groupName.trim(),
+        OwnerID: userId,
+        InviteCode: inviteCode,
+        CreatedAt: now,
+        UpdatedAt: now,
+        MemberCount: 1,
+        MaxMembers: maxMembers,
+        Status: "active",
+      }),
+    })
+  );
+
+  await client.send(
+    new PutItemCommand({
+      TableName: TABLES.MEMBERS,
+      Item: marshall({
+        GroupID: groupId,
+        UserID: userId,
+        UserEmail: body.userEmail || "",
+        UserName: body.userName || "Owner",
+        Role: "owner",
+        Status: "active",
+        Permissions: {
+          canAddItems: true,
+          canEditItems: true,
+          canDeleteItems: true,
+          canInviteMembers: true,
+          canViewAnalytics: true,
+        },
+        JoinedAt: now,
+        InvitedBy: null,
+        LastActiveAt: now,
+      }),
+    })
+  );
+
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const ttl = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+
+  await client.send(
+    new PutItemCommand({
+      TableName: TABLES.INVITATIONS,
+      Item: marshall({
+        InviteCode: inviteCode,
+        GroupID: groupId,
+        GroupName: groupName.trim(),
+        InvitedBy: userId,
+        CreatedAt: now,
+        ExpiresAt: expiresAt,
+        MaxUses: null,
+        UsedCount: 0,
+        Status: "active",
+        TTL: ttl,
+      }),
+    })
+  );
+
+  try {
+    await client.send(
+      new UpdateItemCommand({
+        TableName: TABLES.USERS,
+        Key: marshall({ UserID: userId }),
+        UpdateExpression:
+          "SET Groups = list_append(if_not_exists(Groups, :empty_list), :group), PrimaryGroupID = :gid",
+        ExpressionAttributeValues: marshall({
+          ":empty_list": [],
+          ":group": [groupId],
+          ":gid": groupId,
+        }),
+      })
+    );
+  } catch (err) {
+    console.warn("Failed to update user groups:", err);
+  }
+
+  return response(201, {
+    message: "Group created successfully",
+    group: {
+      groupId,
+      groupName: groupName.trim(),
+      ownerId: userId,
+      inviteCode,
+      memberCount: 1,
+    },
+  });
+}
+
+async function generateInvite(event) {
+  const userId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+
+  if (!groupId) {
+    return response(400, { error: "Missing groupId" });
+  }
+
+  await checkPermission(groupId, userId, "inviteMember");
+
+  const groupResult = await client.send(
+    new GetItemCommand({
+      TableName: TABLES.GROUPS,
+      Key: marshall({ GroupID: groupId }),
+    })
+  );
+
+  if (!groupResult.Item) {
+    return response(404, { error: "Group not found" });
+  }
+
+  const group = unmarshall(groupResult.Item);
+
+  return response(200, {
+    inviteCode: group.InviteCode,
+    groupName: group.GroupName,
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  });
+}
+
+async function joinGroup(event) {
+  const userId = getUserId(event);
+  const body = JSON.parse(event.body || "{}");
+  const { inviteCode, userName, userEmail } = body;
+
+  if (!inviteCode) {
+    return response(400, { error: "Invite code is required" });
+  }
+
+  const inviteResult = await client.send(
+    new GetItemCommand({
+      TableName: TABLES.INVITATIONS,
+      Key: marshall({ InviteCode: inviteCode.toUpperCase() }),
+    })
+  );
+
+  if (!inviteResult.Item) {
+    return response(404, { error: "Invalid invite code" });
+  }
+
+  const invite = unmarshall(inviteResult.Item);
+
+  if (invite.Status !== "active") {
+    return response(400, { error: "Invite code is no longer active" });
+  }
+
+  if (new Date(invite.ExpiresAt) < new Date()) {
+    return response(400, { error: "Invite code has expired" });
+  }
+
+  const groupId = invite.GroupID;
+
+  const existingMember = await getMembership(groupId, userId);
+  if (existingMember) {
+    return response(400, { error: "Already a member of this group" });
+  }
+
+  const groupResult = await client.send(
+    new GetItemCommand({
+      TableName: TABLES.GROUPS,
+      Key: marshall({ GroupID: groupId }),
+    })
+  );
+
+  if (!groupResult.Item) {
+    return response(404, { error: "Group not found" });
+  }
+
+  const group = unmarshall(groupResult.Item);
+
+  if (group.MemberCount >= group.MaxMembers) {
+    return response(400, { error: "Group is full" });
+  }
+
+  const now = new Date().toISOString();
+
+  await client.send(
+    new PutItemCommand({
+      TableName: TABLES.MEMBERS,
+      Item: marshall({
+        GroupID: groupId,
+        UserID: userId,
+        UserEmail: userEmail || "",
+        UserName: userName || "Member",
+        Role: "member",
+        Status: "active",
+        Permissions: {
+          canAddItems: true,
+          canEditItems: true,
+          canDeleteItems: false,
+          canInviteMembers: false,
+          canViewAnalytics: true,
+        },
+        JoinedAt: now,
+        InvitedBy: invite.InvitedBy,
+        LastActiveAt: now,
+      }),
+    })
+  );
+
+  await client.send(
+    new UpdateItemCommand({
+      TableName: TABLES.GROUPS,
+      Key: marshall({ GroupID: groupId }),
+      UpdateExpression: "SET MemberCount = MemberCount + :one, UpdatedAt = :now",
+      ExpressionAttributeValues: marshall({ ":one": 1, ":now": now }),
+    })
+  );
+
+  await client.send(
+    new UpdateItemCommand({
+      TableName: TABLES.INVITATIONS,
+      Key: marshall({ InviteCode: inviteCode.toUpperCase() }),
+      UpdateExpression: "SET UsedCount = UsedCount + :one",
+      ExpressionAttributeValues: marshall({ ":one": 1 }),
+    })
+  );
+
+  try {
+    await client.send(
+      new UpdateItemCommand({
+        TableName: TABLES.USERS,
+        Key: marshall({ UserID: userId }),
+        UpdateExpression: "SET Groups = list_append(if_not_exists(Groups, :empty), :group)",
+        ExpressionAttributeValues: marshall({
+          ":empty": [],
+          ":group": [groupId],
+        }),
+      })
+    );
+  } catch (err) {
+    console.warn("Failed to update user groups:", err);
+  }
+
+  return response(200, {
+    message: "Successfully joined group",
+    group: {
+      groupId,
+      groupName: group.GroupName,
+      role: "member",
+    },
+  });
+}
+
+async function listMembers(event) {
+  const userId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+
+  if (!groupId) {
+    return response(400, { error: "Missing groupId" });
+  }
+
+  await checkPermission(groupId, userId, "viewAnalytics");
+
+  const result = await client.send(
+    new QueryCommand({
+      TableName: TABLES.MEMBERS,
+      KeyConditionExpression: "GroupID = :gid",
+      ExpressionAttributeValues: marshall({ ":gid": groupId }),
+    })
+  );
+
+  const members = (result.Items || []).map((item) => {
+    const m = unmarshall(item);
+    return {
+      userId: m.UserID,
+      userName: m.UserName,
+      userEmail: m.UserEmail,
+      role: m.Role,
+      status: m.Status,
+      permissions: m.Permissions,
+      joinedAt: m.JoinedAt,
+    };
+  });
+
+  return response(200, { members });
+}
+
+async function getUserMember(event) {
+  const requesterId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+  const targetUserId = event.pathParameters?.userId;
+
+  if (!groupId || !targetUserId) {
+    return response(400, { error: "Missing groupId or userId" });
+  }
+
+  await checkPermission(groupId, requesterId, "viewAnalytics");
+
+  const member = await getMembership(groupId, targetUserId);
+
+  if (!member) {
+    return response(404, { error: "Member not found" });
+  }
+
+  return response(200, {
+    userId: member.UserID,
+    userName: member.UserName,
+    userEmail: member.UserEmail,
+    role: member.Role,
+    status: member.Status,
+    permissions: member.Permissions,
+    joinedAt: member.JoinedAt,
+    lastActiveAt: member.LastActiveAt,
+  });
+}
+
+async function listSharedInventory(event) {
+  const userId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+
+  if (!groupId) {
+    return response(400, { error: "Missing groupId" });
+  }
+
+  await checkPermission(groupId, userId, "viewAnalytics");
+
+  const result = await client.send(
+    new QueryCommand({
+      TableName: TABLES.INVENTORY,
+      KeyConditionExpression: "OwnerId = :oid",
+      FilterExpression: "Scope = :scope",
+      ExpressionAttributeValues: marshall({
+        ":oid": groupId,
+        ":scope": "shared",
+      }),
+    })
+  );
+
+  const items = (result.Items || []).map((item) => {
+    const i = unmarshall(item);
+    return {
+      id: i.ItemID,
+      name: i.Name,
+      quantity: i.Quantity,
+      unit: i.Unit,
+      category: i.Category,
+      expiry: i.ExpiryDate,
+      addedBy: i.AddedBy,
+      lastModifiedBy: i.LastModifiedBy,
+      createdAt: i.AddedAt,
+      updatedAt: i.UpdatedAt,
+    };
+  });
+
+  return response(200, { items });
+}
+
+async function addSharedItem(event) {
+  const userId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+
+  if (!groupId) {
+    return response(400, { error: "Missing groupId" });
+  }
+
+  await checkPermission(groupId, userId, "addItem");
+
+  const body = JSON.parse(event.body || "{}");
+  const { name, quantity, unit, category, expiry } = body;
+
+  if (!name || !quantity || !expiry) {
+    return response(400, { error: "Missing required fields: name, quantity, expiry" });
+  }
+
+  const itemId = generateId("ITEM");
+  const now = new Date().toISOString();
+
+  await client.send(
+    new PutItemCommand({
+      TableName: TABLES.INVENTORY,
+      Item: marshall({
+        OwnerId: groupId,
+        ItemID: itemId,
+        Name: name.toLowerCase(),
+        Quantity: Number(quantity),
+        Unit: unit || "pcs",
+        Category: category || "misc",
+        ExpiryDate: expiry,
+        GroupID: groupId,
+        Scope: "shared",
+        AddedBy: userId,
+        LastModifiedBy: userId,
+        AddedAt: now,
+        UpdatedAt: now,
+        Status: "valid",
+        UsedCount: 0,
+      }),
+    })
+  );
+
+  return response(201, {
+    message: "Item added successfully",
+    item: { itemId, name, quantity, unit, category, expiry },
+  });
+}
+
+async function removeMember(event) {
+  const requesterId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+  const targetUserId = event.pathParameters?.userId;
+
+  if (!groupId || !targetUserId) {
+    return response(400, { error: "Missing groupId or userId" });
+  }
+
+  const requesterMember = await getMembership(groupId, requesterId);
+
+  if (!requesterMember || requesterMember.Status !== "active") {
+    return response(403, { error: "Not a member of this group" });
+  }
+
+  if (requesterMember.Role !== "owner" && requesterMember.Role !== "admin") {
+    return response(403, { error: "Only owner/admin can remove members" });
+  }
+
+  const targetMember = await getMembership(groupId, targetUserId);
+  if (targetMember?.Role === "owner") {
+    return response(400, { error: "Cannot remove group owner" });
+  }
+
+  await client.send(
+    new DeleteItemCommand({
+      TableName: TABLES.MEMBERS,
+      Key: marshall({ GroupID: groupId, UserID: targetUserId }),
+    })
+  );
+
+  await client.send(
+    new UpdateItemCommand({
+      TableName: TABLES.GROUPS,
+      Key: marshall({ GroupID: groupId }),
+      UpdateExpression: "SET MemberCount = MemberCount - :one, UpdatedAt = :now",
+      ExpressionAttributeValues: marshall({
+        ":one": 1,
+        ":now": new Date().toISOString(),
+      }),
+    })
+  );
+
+  return response(200, { message: "Member removed successfully" });
+}
+
+async function updatePermissions(event) {
+  const requesterId = getUserId(event);
+  const groupId = event.pathParameters?.groupId;
+  const targetUserId = event.pathParameters?.userId;
+
+  if (!groupId || !targetUserId) {
+    return response(400, { error: "Missing groupId or userId" });
+  }
+
+  const requesterMember = await getMembership(groupId, requesterId);
+
+  if (!requesterMember || requesterMember.Role !== "owner") {
+    return response(403, { error: "Only owner can update permissions" });
+  }
+
+  const body = JSON.parse(event.body || "{}");
+  const { role, permissions } = body;
+
+  const updateExpr = [];
+  const exprValues = {};
+  const exprNames = {};
+
+  if (role && ["admin", "member"].includes(role)) {
+    updateExpr.push("#role = :role");
+    exprValues[":role"] = role;
+    exprNames["#role"] = "Role";
+  }
+
+  if (permissions) {
+    updateExpr.push("Permissions = :perms");
+    exprValues[":perms"] = permissions;
+  }
+
+  if (updateExpr.length === 0) {
+    return response(400, { error: "No updates provided" });
+  }
+
+  const updateParams = {
+    TableName: TABLES.MEMBERS,
+    Key: marshall({ GroupID: groupId, UserID: targetUserId }),
+    UpdateExpression: `SET ${updateExpr.join(", ")}`,
+    ExpressionAttributeValues: marshall(exprValues),
+  };
+
+  if (Object.keys(exprNames).length > 0) {
+    updateParams.ExpressionAttributeNames = exprNames;
+  }
+
+  await client.send(new UpdateItemCommand(updateParams));
+
+  return response(200, { message: "Permissions updated successfully" });
+}
+
+// ===============================
+// MAIN HANDLER (เวอร์ชันใช้ path + regex)
+// ===============================
+
+export const handler = async (event) => {
+  console.log("🚀 EVENT:", JSON.stringify(event, null, 2));
+
+  const method =
+    event.requestContext?.http?.method ||
+    event.httpMethod;
+
+  // ใช้ path ที่แน่ ๆ ว่าไม่มี stage
+  const path =
+    event.requestContext?.http?.path ||
+    event.rawPath ||
+    event.path ||
+    "";
+
+  console.log("📍 Method:", method, "Path:", path, "RouteKey:", event.requestContext?.routeKey);
+
+  // ตอบ CORS สำหรับ preflight
+  if (method === "OPTIONS") {
+    return response(200, { message: "CORS OK" });
+  }
+
+  try {
+    // POST /groups - Create group
+    if (method === "POST" && path === "/groups") {
+      return await createGroup(event);
+    }
+
+    // POST /groups/join - Join group
+    if (method === "POST" && path === "/groups/join") {
+      return await joinGroup(event);
+    }
+
+    // POST /groups/{groupId}/invite - Generate invite
+    if (method === "POST" && /^\/groups\/[^/]+\/invite$/.test(path)) {
+      return await generateInvite(event);
+    }
+
+    // GET /groups/{groupId}/members - List members
+    if (method === "GET" && /^\/groups\/[^/]+\/members$/.test(path)) {
+      return await listMembers(event);
+    }
+
+    // GET /groups/{groupId}/members/{userId} - Get member detail
+    if (method === "GET" && /^\/groups\/[^/]+\/members\/[^/]+$/.test(path)) {
+      return await getUserMember(event);
+    }
+
+    // GET /groups/{groupId}/inventory - List shared items
+    if (method === "GET" && /^\/groups\/[^/]+\/inventory$/.test(path)) {
+      return await listSharedInventory(event);
+    }
+
+    // POST /groups/{groupId}/inventory - Add shared item
+    if (method === "POST" && /^\/groups\/[^/]+\/inventory$/.test(path)) {
+      return await addSharedItem(event);
+    }
+
+    // DELETE /groups/{groupId}/members/{userId} - Remove member
+    if (method === "DELETE" && /^\/groups\/[^/]+\/members\/[^/]+$/.test(path)) {
+      return await removeMember(event);
+    }
+
+    // PUT /groups/{groupId}/members/{userId} - Update permissions
+    if (method === "PUT" && /^\/groups\/[^/]+\/members\/[^/]+$/.test(path)) {
+      return await updatePermissions(event);
+    }
+
+    // ถ้าไม่เข้าเคสข้างบนเลย → route ไม่ตรง
+    return response(404, {
+      error: "Route not found",
+      method,
+      path,
+      routeKey: event.requestContext?.routeKey,
+    });
+  } catch (err) {
+    console.error("❌ ERROR:", err);
+    return response(500, {
+      error: err.message || "Internal server error",
+    });
+  }
+};
